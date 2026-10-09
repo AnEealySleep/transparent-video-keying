@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>透明视频抠像 · 单文件 Demo</title>
+<style>
+  :root{
+    --bg:#14181c; --panel:#1c2228; --line:#2c343c; --ink:#e6edf3; --dim:#8b98a5;
+    --accent:#4ad9b6; --warn:#ffb454;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  header{padding:18px 22px 10px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:17px;font-weight:600}
+  header p{margin:0;color:var(--dim);font-size:12.5px}
+  main{display:flex;gap:20px;padding:20px 22px 40px;align-items:flex-start;flex-wrap:wrap}
+  .stage-wrap{flex:0 0 auto}
+  .stage{
+    /* 棋盘格：一眼看出哪里是真透明 */
+    background-image:
+      linear-gradient(45deg,#2b333b 25%,transparent 25%),
+      linear-gradient(-45deg,#2b333b 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#2b333b 75%),
+      linear-gradient(-45deg,transparent 75%,#2b333b 75%);
+    background-size:20px 20px;
+    background-position:0 0,0 10px,10px -10px,-10px 0;
+    background-color:#21282e;
+    border:1px solid var(--line); border-radius:10px; overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+    width:340px; height:520px;
+  }
+  #stage{display:block;max-width:340px;max-height:520px}
+  .empty{color:var(--dim);font-size:12.5px;text-align:center;padding:0 24px}
+  .stats{
+    margin-top:10px;display:grid;grid-template-columns:auto auto;gap:2px 14px;
+    font-size:12.5px;color:var(--dim);
+  }
+  .stats b{color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
+  .stats .ok{color:var(--accent)}
+  .stats .bad{color:#ff6b6b}
+  .controls{flex:1 1 320px;min-width:300px;max-width:420px}
+  fieldset{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:14px 16px 16px;margin:0 0 14px}
+  legend{padding:0 6px;color:var(--dim);font-size:12px}
+  label{display:block;margin:10px 0 4px;font-size:12.5px;color:var(--dim)}
+  select,button{
+    width:100%;padding:8px 10px;background:#232b33;color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;font:inherit;font-size:13px;
+  }
+  button{cursor:pointer}
+  button.primary{background:rgba(74,217,182,.16);border-color:rgba(74,217,182,.5);color:var(--accent)}
+  .row{display:flex;align-items:center;gap:10px}
+  .row input[type=range]{flex:1;accent-color:var(--accent)}
+  .val{width:52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);font-size:12.5px}
+  .chk{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .chk input{accent-color:var(--accent)}
+  .chk label{margin:0}
+  .hidden{display:none}
+  .hint{margin:10px 0 0;font-size:12px;color:var(--dim);border-left:2px solid var(--line);padding-left:10px}
+  .hint b{color:var(--warn);font-weight:500}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>透明视频抠像 · 单文件 Demo</h1>
+  <p>纯黑 / 纯绿背景的 MP4 → canvas 逐帧键控 → 背景真透明。零依赖，双击即开，视频在你本机读取、不上传。</p>
+</header>
+
+<main>
+  <div class="stage-wrap">
+    <div class="stage" id="stageBox">
+      <div class="empty" id="empty">选择一条视频开始<br><span style="opacity:.7">（黑底或绿底 MP4）</span></div>
+      <canvas id="stage"></canvas>
+    </div>
+    <div class="stats">
+      <span>透明像素占比</span><b id="sRatio">—</b>
+      <span>画面</span><b id="sSize">—</b>
+      <span>每帧耗时</span><b id="sMs">—</b>
+      <span>画布可读性</span><b id="sRead">—</b>
+    </div>
+  </div>
+
+  <div class="controls">
+    <fieldset>
+      <legend>素材</legend>
+      <input type="file" id="file" accept="video/*">
+      <button class="primary" id="btnFile">选择视频（黑底 / 绿幕 MP4）</button>
+      <label>抠像方式（必须与素材匹配）</label>
+      <select id="mode">
+        <option value="chroma">绿幕抠像（纯绿背景）</option>
+        <option value="luma">黑底抠像（纯黑背景）</option>
+        <option value="none">不抠像（保留原背景）</option>
+      </select>
+      <div class="hint" id="hintMode"></div>
+    </fieldset>
+
+    <fieldset id="fsLuma" class="hidden">
+      <legend>黑底键控参数（按亮度判背景）</legend>
+      <div class="chk">
+        <input type="checkbox" id="unmultiply" checked>
+        <label for="unmultiply">去黑边（还原半透明边缘的颜色，建议开启）</label>
+      </div>
+      <label>全透明阈值 keyLow —— 亮度低于它算背景（背景有残留就调大）</label>
+      <div class="row"><input type="range" id="keyLow" min="0" max="120" step="1" value="24"><span class="val" id="keyLowV">24</span></div>
+      <label>全不透明阈值 keyHigh —— 亮度高于它算人物（边缘发灰 / 有黑边就调小）</label>
+      <div class="row"><input type="range" id="keyHigh" min="5" max="200" step="1" value="44"><span class="val" id="keyHighV">44</span></div>
+      <div class="hint">
+        <b>注意</b>：视频里的「纯黑」是 <b>Y≈16</b>（limited range），不是真 0。
+        keyLow 若停在 10，背景像素会拿到 alpha≈45 —— 一层淡灰雾。
+        所以这里默认给 <b>24</b>：先切成「不抠像」看背景实际亮度，再把 keyLow 定在它之上 2~4 级。
+      </div>
+    </fieldset>
+
+    <fieldset id="fsChroma">
+      <legend>绿幕键控参数（按绿色优势度 G−max(R,B) 判背景）</legend>
+      <label>全透明阈值 ckHigh —— 绿度高于它算背景（没抠净就调小）</label>
+      <div class="row"><input type="range" id="ckHigh" min="5" max="200" step="1" value="42"><span class="val" id="ckHighV">42</span></div>
+      <label>全不透明阈值 ckLow —— 绿度低于它算人物（人被咬掉就调大）</label>
+      <div class="row"><input type="range" id="ckLow" min="0" max="120" step="1" value="8"><span class="val" id="ckLowV">8</span></div>
+      <label>去绿边强度 despill（边缘泛绿就调大）</label>
+      <div class="row"><input type="range" id="despill" min="0" max="100" step="5" value="70"><span class="val" id="despillV">70%</span></div>
+      <div class="hint">
+        <b>注意</b>：标准绿幕色 <code>#00B140</code> 经 H.264 / yuv420p 往返后绿色优势度只剩
+        <b>55~58</b>，所以 ckHigh 默认给 42 而不是理论值的 113 —— 照抄理论值会留下半透明绿雾。
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>说明</legend>
+      <div class="hint">
+        两套阈值的「大 / 小」方向是<b>反的</b>：黑底模式「全透明阈值」调大抠得更狠，
+        绿幕模式「全透明阈值」调小抠得更狠。切换素材类型时别沿用上一个模式的经验。
+      </div>
+      <div class="hint">
+        软边是<b>直通 alpha</b>，只在纯黑底上正确。把人物压在白色 UI 上会发白光晕
+        （<code>255×(1−a)</code>），这是数学必然，调阈值解决不了。
+      </div>
+    </fieldset>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   透明视频抠像 · 最小实现（与生产代码同一套算法）
+   三步：离屏 <video> 循环播 → drawImage 到 canvas → 改 alpha 再写回
+   ============================================================ */
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d", { willReadFrequently: true }); // ★ 逐帧读必须有
+ctx.imageSmoothingQuality = "high";
+
+const video = document.createElement("video");
+video.muted = true; video.loop = true; video.playsInline = true;
+video.crossOrigin = "anonymous";
+
+const cfg = {
+  mode: "chroma",
+  keyLow: 24, keyHigh: 44,     // 黑底：亮度阈值（keyLow 见下方说明，要高于"视频里的黑"）
+  ckLow: 8,   ckHigh: 42,      // 绿幕：绿色优势度阈值
+  despill: 0.7,
+  unmultiply: true,
+};
+
+// ---------- 1. 预计算查找表：逐像素只剩一次数组取值 ----------
+const lutA = new Uint8Array(256);    // 键值 → alpha
+const lutM = new Float32Array(256);  // 亮度 → 去预乘系数
+
+function buildKeyLut() {
+  const ch = cfg.mode === "chroma";
+  const lo = ch ? cfg.ckLow : cfg.keyLow;
+  const hi = ch ? cfg.ckHigh : cfg.keyHigh;
+  const span = Math.max(1, hi - lo);
+  for (let v = 0; v < 256; v++) {
+    // 两个方向的映射，别合并：黑底是「越亮越像人物」，绿幕是「越绿越像背景」
+    lutA[v] = ch
+      ? (v <= lo ? 255 : (v >= hi ? 0 : Math.round((hi - v) * 255 / span)))
+      : (v <= lo ?   0 : (v >= hi ? 255 : Math.round((v - lo) * 255 / span)));
+    // 去预乘系数带上限：a 极小时 255/a 会放大到几十倍，边缘会被推成白圈
+    lutM[v] = lutA[v] > 0 ? Math.min(255 / lutA[v], 4) : 0;
+  }
+}
+
+// ---------- 2. 黑底亮度键控 + 去预乘 ----------
+function keyOut(d) {
+  const A = lutA, M = lutM, un = cfg.unmultiply;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    // 三通道最大值最鲁棒：只有三通道都暗才判为背景，深色发丝不会被误抠
+    const lum = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const a = A[lum];
+    if (a === 0)   { d[i + 3] = 0;   continue; }
+    if (a === 255) { d[i + 3] = 255; continue; }
+    d[i + 3] = a;
+    if (un) {                                  // 边缘被黑底压暗 → 乘回去
+      const m = M[lum];
+      d[i]     = Math.min(255, (r * m) | 0);
+      d[i + 1] = Math.min(255, (g * m) | 0);
+      d[i + 2] = Math.min(255, (b * m) | 0);
+    }
+  }
+}
+
+// ---------- 3. 绿幕色度键控 + 去溢色 ----------
+function keyOutChroma(d) {
+  const A = lutA, sp = cfg.despill;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const lim = r > b ? r : b;              // 不"绿"时 G 的合理上限
+    const gr = g > lim ? g - lim : 0;       // 绿色优势度
+    const a = A[gr];
+    if (a === 0) { d[i + 3] = 0; continue; }
+    d[i + 3] = a;
+    if (sp > 0 && gr > 0) {                 // 边缘被绿幕染色 → 把 G 压回去（只压不抬）
+      const k = a < 255 ? sp : sp * 0.45;   // 半透明边缘压得狠，实心像素轻压
+      d[i + 1] = (g - gr * k) | 0;
+    }
+  }
+}
+
+// ---------- 4. 渲染循环：rAF 节流到 ~30fps ----------
+let rafId = null, lastT = 0, lastMs = 0, ready = false;
+
+function layout() {
+  if (!video.videoWidth || !video.videoHeight) return;
+  // 显示尺寸：适配 340×520 的舞台
+  const s = Math.min(340 / video.videoWidth, 520 / video.videoHeight);
+  const dispW = Math.round(video.videoWidth * s);
+  const dispH = Math.round(video.videoHeight * s);
+  // 内部分辨率 = 显示宽 × min(dpr,1.5)：抠像开销 ∝ 像素数，1.5 是画质与开销的平衡点
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  canvas.width  = Math.max(2, Math.round(dispW * dpr));
+  canvas.height = Math.max(2, Math.round(dispH * dpr));
+  canvas.style.width  = dispW + "px";
+  canvas.style.height = dispH + "px";
+  document.getElementById("sSize").textContent = video.videoWidth + "×" + video.videoHeight;
+}
+
+function tick(now) {
+  rafId = requestAnimationFrame(tick);
+  if (!ready) return;
+  if (now - lastT < 32) return;   // ★ 视频本身 24~30fps，跟着 rAF 空转纯属浪费 CPU
+  lastT = now;
+  const t0 = performance.now();
+
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(video, 0, 0, w, h);
+
+  if (cfg.mode === "luma" || cfg.mode === "chroma") {
+    const img = ctx.getImageData(0, 0, w, h);      // ★ 整幅读一次
+    if (cfg.mode === "chroma") keyOutChroma(img.data);
+    else                       keyOut(img.data);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  lastMs = lastMs ? lastMs * 0.8 + (performance.now() - t0) * 0.2 : (performance.now() - t0);
+  drawStats();
+}
+
+function drawStats() {
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let t = 0;
+  const n = d.length / 4;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 8) t++;
+  const ratio = t / n;
+  const el = document.getElementById("sRatio");
+  el.textContent = ratio.toFixed(3);
+  el.className = cfg.mode === "none" ? "" : (ratio > 0.05 && ratio < 0.97 ? "ok" : "bad");
+  document.getElementById("sMs").textContent = lastMs.toFixed(1) + " ms";
+}
+
+function markReadability() {
+  const el = document.getElementById("sRead");
+  try { ctx.getImageData(0, 0, 2, 2); el.textContent = "clean"; el.className = "ok"; }
+  catch (e) { el.textContent = "TAINTED"; el.className = "bad";
+    el.title = "画布被跨源污染，抠像会失效：" + e.name; }
+}
+
+function startLoop() {
+  if (rafId == null) { lastT = 0; rafId = requestAnimationFrame(tick); }
+}
+
+// ---------- 5. 界面接线 ----------
+const $ = (id) => document.getElementById(id);
+
+function syncGroups() {
+  $("fsLuma").classList.toggle("hidden", cfg.mode !== "luma");
+  $("fsChroma").classList.toggle("hidden", cfg.mode !== "chroma");
+  $("hintMode").innerHTML = cfg.mode === "chroma"
+    ? "绿幕：<b>背景没抠净 → 调小</b>全透明阈值 ckHigh；人被咬掉一块 → 调大 ckLow。"
+    : cfg.mode === "luma"
+    ? "黑底：<b>背景有残留 → 调大</b>全透明阈值 keyLow；边缘发灰 / 有黑边 → 调小 keyHigh。"
+    : "不抠像：原样保留视频背景（带 alpha 的 WebM 会在此模式下自然透出）。";
+}
+
+function bindRange(id, key, scale) {
+  const el = $(id), out = $(id + "V");
+  const apply = () => {
+    cfg[key] = scale ? Number(el.value) / 100 : Number(el.value);
+    out.textContent = scale ? el.value + "%" : el.value;
+    buildKeyLut();
+  };
+  el.addEventListener("input", apply);
+  apply();
+}
+
+$("mode").addEventListener("change", () => {
+  cfg.mode = $("mode").value;
+  buildKeyLut(); syncGroups();
+});
+$("unmultiply").addEventListener("change", () => {
+  cfg.unmultiply = $("unmultiply").checked;
+});
+
+bindRange("keyLow", "keyLow");
+bindRange("keyHigh", "keyHigh");
+bindRange("ckHigh", "ckHigh");
+bindRange("ckLow", "ckLow");
+bindRange("despill", "despill", true);
+
+$("btnFile").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  video.src = URL.createObjectURL(f);   // 本地文件，不上传、不发请求
+  video.load();
+  video.play().catch(() => {});
+});
+
+video.addEventListener("loadeddata", () => {
+  ready = true;
+  $("empty").classList.add("hidden");
+  layout();
+  markReadability();
+  startLoop();
+});
+video.addEventListener("error", () => {
+  $("empty").classList.remove("hidden");
+  $("empty").textContent = "这条视频读不了，换一条试试";
+});
+
+// ---------- 6. 可选：把键控函数暴露出来做判据级自检 ----------
+// 与其"看着差不多"，不如直接喂像素断言输出（测的是上面那两个真函数，不是副本）
+window.__dbg = {
+  keyTest: (rgba, mode) => {
+    const d = new Uint8ClampedArray(rgba);
+    if (mode === "chroma") keyOutChroma(d); else keyOut(d);
+    return Array.from(d);
+  },
+  cfg: () => ({ ...cfg }),
+};
+
+document.getElementById("empty").classList.remove("hidden");
+syncGroups();
+buildKeyLut();
+</script>
+</body>
+</html>
